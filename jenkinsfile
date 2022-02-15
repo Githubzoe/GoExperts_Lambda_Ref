@@ -1,0 +1,78 @@
+pipeline {
+    agent any
+       
+     environment {
+        S3_CREDENTIAL = 'adali2021'
+        S3_REGION     = 'ap-southeast-2'
+        BUCKET_NAME   = 'goexpert-process-lambda-upload-images'   
+        LAMBDA_NAME   = 'upload-images'
+    }
+
+    options {
+        // Keep maximum 10 archieved artifacts
+        buildDiscarder(logRotator(numToKeepStr:'10', artifactNumToKeepStr:'10'))
+        // No simultaneous builds
+        disableConcurrentBuilds()
+        durabilityHint('PERFORMANCE_OPTIMIZED') //MAX_SURVIVABILITY or SURVIVABLE_NONATOMIC
+    }
+
+    stages {
+        
+        stage ('npm install') {
+            steps {
+                sh " pip3 install npm "
+            }
+        }
+       
+        stage('Install AWS CLI') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                echo "++++++++++++++++++++++++++++Installing AWS CLI ++++++++++++++++++++++++++++++++"
+                sh 'pip3 install awscli --upgrade'
+            }
+        }
+
+        stage ( 'Zip Archive Sources') {
+            steps {
+                echo "+++++++++++++++++++++++Archiving the sources to a zip file +++++++++++++++++++++"
+                dir ("function"){
+                    sh "zip -r ../${env.LAMBDA_Name}.zip * " 
+                }
+            }
+        }
+
+        stage('Upload to S3 ') {
+
+            steps {
+                echo "++++++++++++++++++++++++Uploading ${env.LAMBDA_NAME}.zip to S3 ++++++++++++++++++"
+                withAWS ( credentials: S3_CREDENTIAL, region: S3_REGION) {
+                    sh "aws s3 cp ${env.LAMBDA_Name}.zip  s3://${env.BUCKET_NAME} "
+                }
+            }
+        }
+        
+        stage('Update lambda code') {
+           steps {
+                echo "+++++++++++++++++++Uploading ${env.LAMBDA_NAME}.zip to Lambda ++++++++++++++++++++"
+                withAWS ( credentials: S3_CREDENTIAL, region: S3_REGION){
+                    sh "aws lambda update-function-code  \
+                        --function-name ${env.LAMBDA_NAME} \
+                        --s3-bucket ${env.BUCKET_NAME} \
+                        --s3-key ${env.LAMBDA_Name}.zip  \
+                        --region ${env.S3_REGION} "
+                }       
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "WELL DONE!"
+        }
+        failure {
+            echo "FAILED"
+        }
+    }
+}
